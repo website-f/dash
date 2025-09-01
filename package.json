@@ -23,12 +23,6 @@
       "preload.js",
       "src/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "../videos",
-        "to": "videos"
-      }
-    ],
     "directories": {
       "output": "dist"
     },

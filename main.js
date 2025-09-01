@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const ffmpeg = require('fluent-ffmpeg');
@@ -11,6 +11,7 @@ const THUMBNAIL_ROOT = 'thumbnails';
 let videoDataCache = [];
 let nextVideoId = 1;
 
+// Create main window
 function createWindow() {
     const win = new BrowserWindow({
         width: 1200,
@@ -19,58 +20,63 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
-            webSecurity: true,
         },
     });
 
     win.loadFile(path.join(__dirname, 'src', 'dashboard.html'));
 }
 
+// Determine base folder depending on platform and packaging
 function getAppPath() {
-    let baseDir = app.isPackaged
-        ? path.dirname(process.execPath)
-        : path.join(__dirname, '..');
+    let baseDir;
 
-    // Traverse upwards until "videos" folder is found
-    let currentDir = baseDir;
-    while (currentDir !== path.parse(currentDir).root) {
-        if (fs.existsSync(path.join(currentDir, VIDEO_ROOT))) {
-            console.log(`[DEBUG] Found videos folder at: ${currentDir}`);
-            return currentDir;
+    if (app.isPackaged) {
+        if (process.platform === 'win32') {
+            baseDir = path.join(path.dirname(process.execPath), '..', '..');
+        } else if (process.platform === 'darwin') {
+            baseDir = path.join(path.dirname(process.execPath), '..', '..', '..');
+        } else {
+            baseDir = path.dirname(process.execPath);
         }
-        currentDir = path.dirname(currentDir);
+    } else {
+        baseDir = path.join(__dirname, '..');
     }
 
-    console.error("[ERROR] Could not find videos folder.");
+    const videosDir = path.join(baseDir, VIDEO_ROOT);
+    if (!fs.existsSync(videosDir)) {
+        console.error("[ERROR] Videos folder not found at:", videosDir);
+    } else {
+        console.log(`[DEBUG] Using videos folder at: ${videosDir}`);
+    }
+
     return baseDir;
 }
 
+// Generate thumbnail at 0.1s
 function generateThumbnail(videoPath, outputDir) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const fileName = path.basename(videoPath, path.extname(videoPath)) + '.png';
         const outputPath = path.join(outputDir, fileName);
 
-        // Skip if already exists
-        if (fs.existsSync(outputPath)) {
-            return resolve(outputPath);
-        }
+        if (fs.existsSync(outputPath)) return resolve(outputPath);
 
         ffmpeg(videoPath)
             .screenshots({
                 count: 1,
-                timemarks: ['0.1'], // capture at 0.1s
+                timemarks: ['0.1'],
                 filename: fileName,
                 folder: outputDir,
-                size: '320x180'
+                size: '320x180',
             })
             .on('end', () => resolve(outputPath))
             .on('error', (err) => {
                 console.error('[ERROR] Thumbnail generation failed:', err.message);
-                reject(err);
+                resolve(null);
             });
     });
 }
 
+// Scan external videos folder and build data
 async function getVideosFromDirectory() {
     const basePath = getAppPath();
     const videosPath = path.join(basePath, VIDEO_ROOT);
@@ -78,8 +84,6 @@ async function getVideosFromDirectory() {
 
     const videoData = [];
     nextVideoId = 1;
-
-    console.log(`[DEBUG] Scanning video directory at: ${videosPath}`);
 
     if (!fs.existsSync(videosPath)) {
         fs.mkdirSync(videosPath, { recursive: true });
@@ -96,36 +100,31 @@ async function getVideosFromDirectory() {
         const files = fs.readdirSync(categoryPath);
 
         for (const file of files) {
-            if (file.endsWith('.mp4')) {
-                const title = file.split('.')[0].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                const videoFilePath = path.join(categoryPath, file);
+            if (!file.endsWith('.mp4')) continue;
 
-                let thumbnailPath;
-                try {
-                    const categoryThumbsDir = path.join(thumbsPath, category);
-                    fs.mkdirSync(categoryThumbsDir, { recursive: true });
+            const title = file.split('.')[0].replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const videoFilePath = path.join(categoryPath, file);
 
-                    thumbnailPath = await generateThumbnail(videoFilePath, categoryThumbsDir);
-                } catch (err) {
-                    thumbnailPath = null;
-                }
+            let thumbnailPath = null;
+            try {
+                const categoryThumbsDir = path.join(thumbsPath, category);
+                fs.mkdirSync(categoryThumbsDir, { recursive: true });
+                thumbnailPath = await generateThumbnail(videoFilePath, categoryThumbsDir);
+            } catch {}
 
-                videoData.push({
-                    id: nextVideoId++,
-                    title,
-                    description: `A tutorial on ${title.toLowerCase()}`,
-                    category,
-                    duration: 0,
-                    views: 0,
-                    url: `${VIDEO_ROOT}/${category}/${file}`,
-                    thumbnail: thumbnailPath
-                        ? `app://${path.relative(basePath, thumbnailPath).replace(/\\/g, '/')}`
-                        : `https://placehold.co/320x180?text=${title.substring(0, 15)}`,
-                    dateAdded: new Date().toISOString().split('T')[0]
-                });
-
-                console.log(`[DEBUG] Found and added video: ${file}`);
-            }
+            videoData.push({
+                id: nextVideoId++,
+                title,
+                description: `A tutorial on ${title.toLowerCase()}`,
+                category,
+                duration: 0,
+                views: 0,
+                url: `file://${videoFilePath.replace(/\\/g, '/')}`, // direct file URL
+                thumbnail: thumbnailPath
+                    ? `file://${thumbnailPath.replace(/\\/g, '/')}`
+                    : `https://placehold.co/320x180?text=${title.substring(0, 15)}`,
+                dateAdded: new Date().toISOString().split('T')[0]
+            });
         }
     }
 
@@ -133,16 +132,12 @@ async function getVideosFromDirectory() {
     return videoData;
 }
 
+// Import new video to external folder
 function importVideoFile(videoDetails) {
     const appBaseDir = getAppPath();
     const targetCategoryFolder = path.join(appBaseDir, VIDEO_ROOT, videoDetails.category);
 
-    console.log(`[DEBUG] Importing file from: ${videoDetails.url}`);
-    console.log(`[DEBUG] Target category folder: ${targetCategoryFolder}`);
-
-    if (!fs.existsSync(targetCategoryFolder)) {
-        fs.mkdirSync(targetCategoryFolder, { recursive: true });
-    }
+    if (!fs.existsSync(targetCategoryFolder)) fs.mkdirSync(targetCategoryFolder, { recursive: true });
 
     const originalFilePath = videoDetails.url;
     const fileName = path.basename(originalFilePath);
@@ -154,23 +149,15 @@ function importVideoFile(videoDetails) {
 
     try {
         fs.copyFileSync(originalFilePath, destinationPath);
-        console.log(`[INFO] Successfully copied video: ${destinationPath}`);
         return { success: true, message: 'Video added successfully.' };
     } catch (error) {
-        console.error(`[ERROR] File copy error: ${error}`);
         return { success: false, message: `Failed to add video: ${error.message}` };
     }
 }
 
-// IPC Handlers
-ipcMain.handle('get-videos', async () => {
-    return await getVideosFromDirectory();
-});
-
-ipcMain.handle('add-video', (event, videoDetails) => {
-    return importVideoFile(videoDetails);
-});
-
+// IPC handlers
+ipcMain.handle('get-videos', async () => await getVideosFromDirectory());
+ipcMain.handle('add-video', (event, videoDetails) => importVideoFile(videoDetails));
 ipcMain.handle('show-file-dialog', async () => {
     const result = await dialog.showOpenDialog({
         properties: ['openFile'],
@@ -180,70 +167,12 @@ ipcMain.handle('show-file-dialog', async () => {
 });
 
 app.whenReady().then(() => {
-    protocol.handle('app', async (request) => {
-    const urlPath = request.url.replace('app://', '');
-    const filePath = path.join(getAppPath(), urlPath);
-
-    try {
-        const stat = fs.statSync(filePath);
-        const range = request.headers.get('range');
-
-        if (range) {
-            // Parse range header: e.g. "bytes=0-1023"
-            const parts = range.replace(/bytes=/, "").split("-");
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-
-            const chunkSize = (end - start) + 1;
-            const stream = fs.createReadStream(filePath, { start, end });
-
-            let contentType = 'application/octet-stream';
-            if (filePath.endsWith('.mp4')) contentType = 'video/mp4';
-            else if (filePath.endsWith('.png')) contentType = 'image/png';
-            else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) contentType = 'image/jpeg';
-
-            return new Response(stream, {
-                status: 206, // Partial Content
-                headers: {
-                    'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-                    'Accept-Ranges': 'bytes',
-                    'Content-Length': chunkSize,
-                    'Content-Type': contentType,
-                },
-            });
-        } else {
-            // No range → send full file
-            const stream = fs.createReadStream(filePath);
-            let contentType = 'application/octet-stream';
-            if (filePath.endsWith('.mp4')) contentType = 'video/mp4';
-            else if (filePath.endsWith('.png')) contentType = 'image/png';
-            else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) contentType = 'image/jpeg';
-
-            return new Response(stream, {
-                headers: {
-                    'Content-Length': stat.size,
-                    'Content-Type': contentType,
-                },
-            });
-        }
-    } catch (error) {
-        console.error(`[ERROR] Failed to serve file: ${filePath}`, error);
-        return new Response('File not found', { status: 404 });
-    }
-});
-
-
     createWindow();
-
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
-        }
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
 });
 
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    if (process.platform !== 'darwin') app.quit();
 });

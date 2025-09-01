@@ -227,9 +227,18 @@ function openVideoPlayer(videoUrl) {
     videoDetailMetaEl.textContent = `${getCategoryDisplayName(video.category)} • ${formatDuration(video.duration)} • ${formatViews(video.views)} views`;
     videoDetailDescriptionEl.textContent = video.description;
     
-    console.log(`[DEBUG - Renderer] Attempting to set video source to: app://${video.url}`);
-    videoPlayerEl.src = `app://${video.url}`;
-    
+    // Fix: use file:// path for external videos
+    let srcPath = video.url;
+    if (!srcPath.startsWith('file://')) {
+        // convert Windows path to file:// URL
+        srcPath = `file:///${srcPath.replace(/\\/g, '/')}`;
+    }
+
+    console.log(`[DEBUG - Renderer] Setting video source to: ${srcPath}`);
+    videoPlayerEl.src = srcPath;
+    videoPlayerEl.load();
+    videoPlayerEl.play().catch(err => console.error(err));
+
     video.views++;
     updateStats();
     renderVideoGrid();
@@ -237,6 +246,7 @@ function openVideoPlayer(videoUrl) {
     
     videoPlayerModalInstance.show();
 }
+
 
 async function handleAddVideo() {
     const title = document.getElementById('videoTitle').value;
