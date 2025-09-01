@@ -24,7 +24,6 @@ function createWindow() {
     });
 
     win.loadFile(path.join(__dirname, 'src', 'dashboard.html'));
-    win.webContents.openDevTools(); // dev only
 }
 
 function getAppPath() {
