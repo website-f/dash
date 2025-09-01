@@ -226,26 +226,18 @@ function openVideoPlayer(videoUrl) {
     videoDetailTitleEl.textContent = video.title;
     videoDetailMetaEl.textContent = `${getCategoryDisplayName(video.category)} • ${formatDuration(video.duration)} • ${formatViews(video.views)} views`;
     videoDetailDescriptionEl.textContent = video.description;
-    
-    // Fix: use file:// path for external videos
-    let srcPath = video.url;
-    if (!srcPath.startsWith('file://')) {
-        // convert Windows path to file:// URL
-        srcPath = `file:///${srcPath.replace(/\\/g, '/')}`;
-    }
 
-    console.log(`[DEBUG - Renderer] Setting video source to: ${srcPath}`);
-    videoPlayerEl.src = srcPath;
-    videoPlayerEl.load();
-    videoPlayerEl.play().catch(err => console.error(err));
+    console.log(`[DEBUG] Setting video source: ${video.url}`);
+    videoPlayerEl.src = video.url; // app:// URL works now
 
     video.views++;
     updateStats();
     renderVideoGrid();
     renderManageTable();
-    
+
     videoPlayerModalInstance.show();
 }
+
 
 
 async function handleAddVideo() {
